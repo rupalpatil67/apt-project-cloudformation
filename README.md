@@ -5,11 +5,11 @@ This repository contains a full CloudFormation-based solution to deploy a Node.j
 ## Repo layout
 ```
 cloudformation/
-  template.yaml       # CloudFormation template (create VPC, ALB, ASG, LT, IAM, etc)
+  template.yaml       # CloudFormation template
 app/
-  index.js            # Node.js sample app (also embedded in LaunchTemplate user-data)
+  index.js            # Node.js sample app 
 scripts/
-  deploy.sh           # Deploys the CloudFormation stack using AWS CLI
+  deploy.sh           # Deploys the CloudFormation stack 
   destroy.sh          # Deletes the CloudFormation stack
   test.sh             # Tests the ALB endpoints
 screenshots/
@@ -17,7 +17,7 @@ screenshots/
   target-group.png
   api-test.png
   private-ec2.png
-  
+
 README.md
 ```
 
@@ -45,7 +45,7 @@ Expected output:
 - `curl http://<ALB_DNS>/health` should return `ok` (200)
 
 
-## Teardown
+## Destroy Cloudformation Stack 
 ```bash
 ./scripts/destroy.sh
 ```
