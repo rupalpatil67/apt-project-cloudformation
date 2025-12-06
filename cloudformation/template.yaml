@@ -26,10 +26,6 @@ Parameters:
     Type: String
     Default: t3.micro
 
-  KeyName:
-    Type: AWS::EC2::KeyPair::KeyName
-    Description: Optional KeyPair, not needed for SSM
-
   DesiredCapacity:
     Type: Number
     Default: 2
@@ -45,16 +41,15 @@ Parameters:
 
 Resources:
 
-  # ------------------------------------------------
-  # Networking (VPC, Subnets, Routes, NAT, IGW)
-  # ------------------------------------------------
-
+  # =======================
+  # VPC + Subnets
+  # =======================
   VPC:
     Type: AWS::EC2::VPC
     Properties:
       CidrBlock: !Ref VpcCidr
-      EnableDnsHostnames: true
       EnableDnsSupport: true
+      EnableDnsHostnames: true
 
   InternetGateway:
     Type: AWS::EC2::InternetGateway
@@ -62,8 +57,8 @@ Resources:
   VPCGatewayAttachment:
     Type: AWS::EC2::VPCGatewayAttachment
     Properties:
-      InternetGatewayId: !Ref InternetGateway
       VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
 
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
@@ -94,19 +89,19 @@ Resources:
       MapPublicIpOnLaunch: true
       AvailabilityZone: !Select [1, !GetAZs ""]
 
-  PublicSubnet1RouteTableAssociation:
+  PublicSubnet1Assoc:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref PublicSubnet1
       RouteTableId: !Ref PublicRouteTable
 
-  PublicSubnet2RouteTableAssociation:
+  PublicSubnet2Assoc:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref PublicSubnet2
       RouteTableId: !Ref PublicRouteTable
 
-  # NAT Gateway
+  # NAT
   EIPForNAT:
     Type: AWS::EC2::EIP
     DependsOn: VPCGatewayAttachment
@@ -147,39 +142,38 @@ Resources:
       MapPublicIpOnLaunch: false
       AvailabilityZone: !Select [1, !GetAZs ""]
 
-  PrivateSubnet1RouteTableAssociation:
+  PrivateSubnet1Assoc:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref PrivateSubnet1
       RouteTableId: !Ref PrivateRouteTable
 
-  PrivateSubnet2RouteTableAssociation:
+  PrivateSubnet2Assoc:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref PrivateSubnet2
       RouteTableId: !Ref PrivateRouteTable
 
 
-  # ------------------------------------------------
-  # Security Groups
-  # ------------------------------------------------
-
+  # =======================
+  # SECURITY GROUPS
+  # =======================
   ALBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
+      GroupDescription: ALB SG
       VpcId: !Ref VPC
-      GroupDescription: Allow HTTP from anywhere
       SecurityGroupIngress:
         - IpProtocol: tcp
-          CidrIp: 0.0.0.0/0
           FromPort: 80
           ToPort: 80
+          CidrIp: 0.0.0.0/0
 
   EC2SecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
+      GroupDescription: EC2 SG
       VpcId: !Ref VPC
-      GroupDescription: Allow HTTP 8080 from ALB
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 8080
@@ -187,10 +181,9 @@ Resources:
           SourceSecurityGroupId: !Ref ALBSecurityGroup
 
 
-  # ------------------------------------------------
-  # ALB + Target Group
-  # ------------------------------------------------
-
+  # =======================
+  # APPLICATION LOAD BALANCER
+  # =======================
   ALB:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
@@ -200,17 +193,15 @@ Resources:
         - !Ref PublicSubnet2
       SecurityGroups:
         - !Ref ALBSecurityGroup
-      Type: application
 
   ALBTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      VpcId: !Ref VPC
-      Protocol: HTTP
       Port: 8080
-      TargetType: instance
+      Protocol: HTTP
+      VpcId: !Ref VPC
       HealthCheckPath: /health
-      HealthCheckIntervalSeconds: 15
+      TargetType: instance
       Matcher:
         HttpCode: '200'
 
@@ -225,11 +216,10 @@ Resources:
           TargetGroupArn: !Ref ALBTargetGroup
 
 
-  # ------------------------------------------------
-  # IAM Instance Role
-  # ------------------------------------------------
-
-  InstanceProfileRole:
+  # =======================
+  # IAM ROLE FOR EC2
+  # =======================
+  InstanceRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
@@ -237,23 +227,21 @@ Resources:
         Statement:
           - Effect: Allow
             Principal:
-              Service: [ec2.amazonaws.com]
+              Service: ec2.amazonaws.com
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
-        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
 
   InstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
       Roles:
-        - !Ref InstanceProfileRole
+        - !Ref InstanceRole
 
 
-  # ------------------------------------------------
-  # Launch Template (Node.js App with UserData)
-  # ------------------------------------------------
-
+  # =======================
+  # LAUNCH TEMPLATE
+  # =======================
   LaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
     Properties:
@@ -265,43 +253,37 @@ Resources:
         NetworkInterfaces:
           - DeviceIndex: 0
             SubnetId: !Ref PrivateSubnet1
-            AssociatePublicIpAddress: false
             Groups:
               - !Ref EC2SecurityGroup
-        TagSpecifications:
-          - ResourceType: instance
-            Tags:
-              - Key: Name
-                Value: OneClick-Instance
         UserData:
           Fn::Base64: !Sub |
-            #!/bin/bash -xe
+            #!/bin/bash
             yum update -y
             yum install -y nodejs git
 
-            mkdir -p /opt/oneclick
+            mkdir -p /opt/app
 
-            cat >/opt/oneclick/index.js <<'EOF'
+            cat >/opt/app/index.js <<EOF
             const http = require('http');
             const server = http.createServer((req, res) => {
               if (req.url === '/health') {
-                res.writeHead(200, {'Content-Type': 'text/plain'});
+                res.writeHead(200);
                 res.end('ok');
               } else {
-                res.writeHead(200, {'Content-Type': 'text/plain'});
-                res.end('Hello from private EC2 (index)!\n');
+                res.writeHead(200);
+                res.end('Hello from private EC2!');
               }
             });
             server.listen(8080, '0.0.0.0');
             EOF
 
-            cat >/etc/systemd/system/oneclick.service <<EOF
+            cat >/etc/systemd/system/app.service <<EOF
             [Unit]
-            Description=NodeJS App
+            Description=Node App
             After=network.target
 
             [Service]
-            ExecStart=/usr/bin/node /opt/oneclick/index.js
+            ExecStart=/usr/bin/node /opt/app/index.js
             Restart=always
 
             [Install]
@@ -309,14 +291,13 @@ Resources:
             EOF
 
             systemctl daemon-reload
-            systemctl enable oneclick
-            systemctl start oneclick
+            systemctl enable app
+            systemctl start app
 
 
-  # ------------------------------------------------
-  # Auto Scaling Group
-  # ------------------------------------------------
-
+  # =======================
+  # AUTO SCALING GROUP
+  # =======================
   AutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
@@ -335,5 +316,5 @@ Resources:
 
 Outputs:
   ALBDNSName:
-    Description: ALB DNS name to test the API
+    Description: "Use this URL to test app"
     Value: !GetAtt ALB.DNSName
