@@ -38,7 +38,6 @@ Parameters:
     Type: Number
     Default: 4
 
-
 Resources:
 
   # =======================
@@ -101,7 +100,7 @@ Resources:
       SubnetId: !Ref PublicSubnet2
       RouteTableId: !Ref PublicRouteTable
 
-  # NAT
+  # NAT Gateway
   EIPForNAT:
     Type: AWS::EC2::EIP
     DependsOn: VPCGatewayAttachment
@@ -154,7 +153,6 @@ Resources:
       SubnetId: !Ref PrivateSubnet2
       RouteTableId: !Ref PrivateRouteTable
 
-
   # =======================
   # SECURITY GROUPS
   # =======================
@@ -179,7 +177,6 @@ Resources:
           FromPort: 8080
           ToPort: 8080
           SourceSecurityGroupId: !Ref ALBSecurityGroup
-
 
   # =======================
   # APPLICATION LOAD BALANCER
@@ -215,7 +212,6 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref ALBTargetGroup
 
-
   # =======================
   # IAM ROLE FOR EC2
   # =======================
@@ -238,7 +234,6 @@ Resources:
       Roles:
         - !Ref InstanceRole
 
-
   # =======================
   # LAUNCH TEMPLATE
   # =======================
@@ -258,26 +253,27 @@ Resources:
         UserData:
           Fn::Base64: !Sub |
             #!/bin/bash
+            set -e
             yum update -y
             yum install -y nodejs git
 
             mkdir -p /opt/app
 
-            cat >/opt/app/index.js <<EOF
+            cat >/opt/app/index.js <<'EOF'
             const http = require('http');
             const server = http.createServer((req, res) => {
               if (req.url === '/health') {
-                res.writeHead(200);
+                res.writeHead(200, {'Content-Type':'text/plain'});
                 res.end('ok');
               } else {
-                res.writeHead(200);
-                res.end('Hello from private EC2!');
+                res.writeHead(200, {'Content-Type':'text/plain'});
+                res.end('Hello from private EC2!\n');
               }
             });
             server.listen(8080, '0.0.0.0');
             EOF
 
-            cat >/etc/systemd/system/app.service <<EOF
+            cat >/etc/systemd/system/app.service <<'EOF'
             [Unit]
             Description=Node App
             After=network.target
@@ -285,6 +281,7 @@ Resources:
             [Service]
             ExecStart=/usr/bin/node /opt/app/index.js
             Restart=always
+            RestartSec=5
 
             [Install]
             WantedBy=multi-user.target
@@ -293,7 +290,6 @@ Resources:
             systemctl daemon-reload
             systemctl enable app
             systemctl start app
-
 
   # =======================
   # AUTO SCALING GROUP
@@ -312,9 +308,14 @@ Resources:
       DesiredCapacity: !Ref DesiredCapacity
       TargetGroupARNs:
         - !Ref ALBTargetGroup
-
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 60
 
 Outputs:
   ALBDNSName:
     Description: "Use this URL to test app"
     Value: !GetAtt ALB.DNSName
+
+  ALBTargetGroupArn:
+    Description: "ARN of the ALB Target Group"
+    Value: !Ref ALBTargetGroup
